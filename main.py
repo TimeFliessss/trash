@@ -39,7 +39,7 @@ def _progress(iterable: Sequence, enabled: bool, **kwargs):
     return iterable
 
 
-def _collect_recent_battles(g4p_client, query_time: float):
+def _collect_recent_battles(g4p_client, query_time: float, roleId: str):
     tabs = g4p_client.get_battle_mode_tabs()
     all_battles = []
     for t in RECORDING_TAB_MODES:
@@ -49,7 +49,7 @@ def _collect_recent_battles(g4p_client, query_time: float):
         modes = [x['mode'] for x in tab['modeList'] if x['name'] in t[1]]
         if not modes:
             continue
-        battles = g4p_client.get_pubg_battle_list(page=1, count=30, tabIndex=tab['tabIndex'], modes=modes)
+        battles = g4p_client.get_pubg_battle_list(page=1, count=30, tabIndex=tab['tabIndex'], modes=modes, role_id=roleId)
         all_battles.extend(battles['list'])
     return [x for x in all_battles if 0 <= query_time - int(x['startime']) <= QUERY_RANGE_SECONDS]
 
@@ -78,15 +78,18 @@ def run_highlight_pipeline(show_progress: bool = True, selected_live_keys=None) 
     query_time = time.time()
 
     g4p_client = g4p_login()
-    recent_battles = _collect_recent_battles(g4p_client, query_time)
+    roles = [i['roleId'] for i in g4p_client.account_manager.role_list]
+    recent_battles = []
+    for roleId in roles:
+        for b in _collect_recent_battles(g4p_client, query_time, roleId=roleId):
+            recent_battles.append((b, roleId))
     if not recent_battles:
         raise HighlightPipelineError("最近 24 小时内没有找到有效对局。")
-
     wonderful_times = []
-    for b in _progress(recent_battles, show_progress, desc="获取精彩时间", unit="局"):
+    for b, roleId in _progress(recent_battles, show_progress, desc="获取精彩时间", unit="局"):
         attempt = 15
         while attempt > 0:
-            replay_data = g4p_client.parse_replay_data(battleId=b['battleId'])
+            replay_data = g4p_client.parse_replay_data(battleId=b['battleId'], role_id=roleId)
             if replay_data["reviewStatus"] == 3:
                 rep_data = g4p_client.get_pubg_replay_data(b['battleId'])
                 wonderful_times.extend(get_wonderful_times(g4p_client.account_manager.game_open_id, rep_data['dataUrl']))
@@ -207,7 +210,10 @@ async def run_pipeline_api(request: Request):
 async def get_recent_battles():
     def _work():
         g4p_client = g4p_login()
-        battles = _collect_recent_battles(g4p_client, time.time())
+        roles = [i['roleId'] for i in g4p_client.account_manager.role_list]
+        battles = []
+        for roleId in roles:
+            battles.extend(_collect_recent_battles(g4p_client, time.time(), roleId=roleId))
         return {"count": len(battles), "battles": battles}
 
     try:
