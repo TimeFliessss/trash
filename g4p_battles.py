@@ -13,17 +13,50 @@ try:
     sys.stdout.flush()
 except UnicodeEncodeError:
     BLOCK = 'MM'
+    USE_UNICODE_BLOCK = False
 else:
     BLOCK = b
+    USE_UNICODE_BLOCK = True
+
+def _compact_qr(qr_text):
+    lines = [line for line in qr_text.splitlines() if line]
+    if not lines:
+        return ""
+    width = max(len(line) for line in lines)
+    lines = [line.ljust(width, "0") for line in lines]
+    compact_lines = []
+    for i in range(0, len(lines), 2):
+        upper = lines[i]
+        lower = lines[i + 1] if i + 1 < len(lines) else "0" * width
+        row = []
+        for u, l in zip(upper, lower):
+            if u == "1" and l == "1":
+                row.append("\u2588")  # full block
+            elif u == "1" and l == "0":
+                row.append("\u2580")  # upper half block
+            elif u == "0" and l == "1":
+                row.append("\u2584")  # lower half block
+            else:
+                row.append(" ")
+        compact_lines.append("".join(row))
+    return "\n".join(compact_lines)
+
 
 def print_cmd_qr(qrText, white=BLOCK, black='  ', enableCmdQR=True):
+    if USE_UNICODE_BLOCK:
+        sys.stdout.write(' ' * 50 + '\r')
+        sys.stdout.flush()
+        sys.stdout.write(_compact_qr(qrText) + "\n")
+        sys.stdout.flush()
+        return
+
     blockCount = int(enableCmdQR)
     if abs(blockCount) == 0:
         blockCount = 1
     white *= abs(blockCount)
     if blockCount < 0:
         white, black = black, white
-    sys.stdout.write(' '*50 + '\r')
+    sys.stdout.write(' ' * 50 + '\r')
     sys.stdout.flush()
     qr = qrText.replace('0', white).replace('1', black)
     sys.stdout.write(qr)
@@ -64,8 +97,10 @@ def login_flow(client, account):
     print("wechat scan confirmed. requesting auth...")
     client.get_personal_auth(open_id)
     info = client.login(open_id)
+    info["_wx_code"] = open_id
     account.save_login_info(info)
     print("login success. info cached.")
+    return info
 
 
 def g4p_login():

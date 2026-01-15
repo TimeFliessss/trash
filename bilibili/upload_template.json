@@ -1,0 +1,18 @@
+{
+  "tid": 4,
+  "tags": ["FPS", "直播录像", "和平精英"],
+  "cover_path": "",
+  "description": "",
+  "dynamic": "",
+  "original": true,
+  "no_reprint": true,
+  "recreate": false,
+  "open_elec": false,
+  "up_selection_reply": false,
+  "up_close_danmu": false,
+  "up_close_reply": false,
+  "lossless_music": false,
+  "dolby": false,
+  "watermark": false,
+  "delay_time": ""
+}

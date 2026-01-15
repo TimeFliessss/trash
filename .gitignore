@@ -3,4 +3,5 @@ __pycache__/
 clips/
 cookie.txt
 LoginInfo.txt
+BiliLoginInfo.json
 *.pyc

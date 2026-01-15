@@ -37,10 +37,16 @@ def get_streams(live_info):
     data = r.json()
     return data["data"]["list"]
 
-def cut_hls_segment(m3u8_url, start, duration, output_path):
+def cut_hls_segment(m3u8_url, start, duration, output_path, reset_ts=True, audio_fix=True):
     args = [FFMPEG, "-y", "-hide_banner", "-loglevel", "error"]
     args += ["-ss", str(start), "-i", m3u8_url, "-t", str(duration)]
-    args += ["-c", "copy", "-movflags", "+faststart"]
+    if reset_ts:
+        args += ["-fflags", "+genpts", "-avoid_negative_ts", "make_zero", "-reset_timestamps", "1", "-max_interleave_delta", "1M"]
+    if audio_fix:
+        args += ["-c:v", "copy", "-c:a", "aac", "-ar", "48000", "-af", "aresample=async=1:first_pts=0"]
+    else:
+        args += ["-c", "copy"]
+    args += ["-movflags", "+faststart"]
     args += [output_path]
     proc = subprocess.run(args, capture_output=True, text=True)
     if proc.returncode != 0:

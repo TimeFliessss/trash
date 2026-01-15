@@ -9,6 +9,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, FileResponse
 
 from auto_cut import get_wonderful_times, preprocess_wonderful
+from bilibili.bili_auth import ensure_cookie, BiliAuthError
 from bili_replay_min import init, get_replay_list, get_streams, cut_hls_segment
 from g4p_battles import g4p_login, is_g4p_logged_in
 from tqdm import tqdm
@@ -23,14 +24,12 @@ class HighlightPipelineError(RuntimeError):
 
 
 def _ensure_cookie() -> str:
-    if not COOKIE_FILE.exists():
-        COOKIE_FILE.write_text("PUT_YOUR_BILIBILI_COOKIE_HERE", encoding="utf-8")
-        raise HighlightPipelineError("已自动创建 cookie.txt，请按照 README 步骤粘贴你的 B 站 Cookie 后重新运行。")
-
-    cookie_str = COOKIE_FILE.read_text(encoding="utf-8").lstrip("\ufeff").strip()
-    if not cookie_str or "PUT_YOUR_BILIBILI_COOKIE_HERE" in cookie_str:
-        raise HighlightPipelineError("cookie.txt 未配置，请粘贴完整的 B 站 Cookie。")
-    return cookie_str
+    try:
+        return ensure_cookie()
+    except BiliAuthError as exc:
+        if not COOKIE_FILE.exists():
+            COOKIE_FILE.write_text("PUT_YOUR_BILIBILI_COOKIE_HERE", encoding="utf-8")
+        raise HighlightPipelineError(str(exc))
 
 
 def _progress(iterable: Sequence, enabled: bool, **kwargs):
@@ -72,7 +71,6 @@ def _select_target_replays(replays, selected_live_keys):
         return selected
     return replays[:1]
 
-
 def run_highlight_pipeline(show_progress: bool = True, selected_live_keys=None) -> dict:
     cookie_str = _ensure_cookie()
     query_time = time.time()
@@ -85,19 +83,34 @@ def run_highlight_pipeline(show_progress: bool = True, selected_live_keys=None) 
             recent_battles.append((b, roleId))
     if not recent_battles:
         raise HighlightPipelineError("最近 24 小时内没有找到有效对局。")
-    wonderful_times = []
+    wonderful_infos = []
     for b, roleId in _progress(recent_battles, show_progress, desc="获取精彩时间", unit="局"):
         attempt = 15
         while attempt > 0:
             replay_data = g4p_client.parse_replay_data(battleId=b['battleId'], role_id=roleId)
             if replay_data["reviewStatus"] == 3:
                 rep_data = g4p_client.get_pubg_replay_data(b['battleId'])
-                wonderful_times.extend(get_wonderful_times(g4p_client.account_manager.game_open_id, rep_data['dataUrl']))
+                mode = rep_data['baseInfo']['modeName']
+                play_time = rep_data['baseInfo']['playTime']
+                rank = rep_data['baseInfo']['teamRank'] + "/" + rep_data['baseInfo']['teamCount']
+                areas = rep_data['areas']
+                resources = rep_data['configs']
+                info = get_wonderful_times(
+                    g4p_client.account_manager.game_open_id,
+                    rep_data['dataUrl'],
+                    areas=areas,
+                    resources=resources,
+                    mode=mode,
+                    play_time=play_time,
+                    rank=rank,
+                )
+                if info:
+                    wonderful_infos.append(info)
                 break
             attempt -= 1
             time.sleep(1)
 
-    if not wonderful_times:
+    if not wonderful_infos:
         raise HighlightPipelineError("未能从最近对局中解析出精彩时间。")
 
     try:
@@ -125,7 +138,13 @@ def run_highlight_pipeline(show_progress: bool = True, selected_live_keys=None) 
 
         start_time = m3u8["start_time"]
         end_time = m3u8["end_time"]
-        merged_clips = preprocess_wonderful(wonderful_times, start_time, end_time, pad_before=12, pad_after=5)
+        merged_clips, description_chunks = preprocess_wonderful(
+            wonderful_infos,
+            start_time,
+            end_time,
+            pad_before=15,
+            pad_after=6,
+        )
         if not merged_clips:
             raise HighlightPipelineError("近 24 小时内未检测到精彩时刻，或录像尚未生成。")
 
@@ -151,6 +170,7 @@ def run_highlight_pipeline(show_progress: bool = True, selected_live_keys=None) 
             "success_count": success_count,
             "clip_files": clip_files_current,
             "failed_messages": failed_current,
+            "description_chunks": description_chunks,
         })
 
     return {

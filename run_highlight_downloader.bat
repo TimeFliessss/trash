@@ -33,9 +33,9 @@ if not exist "%VENV_PY%" (
 
 set "PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple"
 echo [INFO] 安装 Python 依赖（仅首次或版本变更时会稍慢）...
-"%VENV_PY%" -m pip install --upgrade pip -i "%PIP_INDEX%"
+"%VENV_PY%" -m pip install --upgrade pip -i "%PIP_INDEX%" >nul 2>&1
 if errorlevel 1 goto :pip_fail
-"%VENV_PY%" -m pip install -r requirements.txt -i "%PIP_INDEX%"
+"%VENV_PY%" -m pip install -r requirements.txt -i "%PIP_INDEX%" >nul 2>&1
 if errorlevel 1 goto :pip_fail
 
 set "COOKIE_PATH=%SCRIPT_DIR%cookie.txt"
@@ -50,7 +50,8 @@ if not errorlevel 1 (
     goto :need_cookie
 )
 
-echo [INFO] 启动本地 Web 服务，稍后在浏览器打开 http://127.0.0.1:8000 点击“开始导出”（按 Ctrl+C 可停止）。
+echo [INFO] 启动本地 Web 服务，稍后会自动打开浏览器 http://127.0.0.1:8000 （按 Ctrl+C 可停止）。
+start "" cmd /c "timeout /t 2 >nul & start \"\" \"http://127.0.0.1:8000\""
 "%VENV_PY%" "%SCRIPT_DIR%main.py"
 if errorlevel 1 goto :run_fail
 exit /b 0
