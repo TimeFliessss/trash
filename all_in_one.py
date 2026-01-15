@@ -93,8 +93,8 @@ def _run_concat(output_dir: Path):
     if not script.exists():
         print("[ERROR] concat_clips.py not found.")
         return False
-    # cmd = [sys.executable, str(script), "--dir", str(output_dir), "--out", "clips_all.mp4"]
-    cmd = [sys.executable, str(script), "--dir", str(output_dir), "--out", "clips_all.mp4", "--strategy", "copy"]
+    cmd = [sys.executable, str(script), "--dir", str(output_dir), "--out", "clips_all.mp4"]
+    # cmd = [sys.executable, str(script), "--dir", str(output_dir), "--out", "clips_all.mp4", "--strategy", "copy"]
     print(f"[INFO] Merging clips in {output_dir} ...")
     try:
         subprocess.run(cmd, check=True)
