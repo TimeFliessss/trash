@@ -97,6 +97,8 @@ def highlight_info_to_description(info: dict) -> str:
     lines = [header]
     _RE_HAN = re.compile(r'[\u4e00-\u9fff]+')
     def remove_han_unless_all_han(s: str) -> str:
+        if not s:
+            return ""
         t = s.strip()
         if t and _RE_HAN.sub('', t) == '':
             return s
