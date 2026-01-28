@@ -75,8 +75,8 @@ def main() -> int:
             _send_danmaku(room, msg_time)
             print(f"[INFO] Sent: {msg_time}")
             time.sleep(5)
-            _send_danmaku(room, "秒")
-            print("[INFO] Sent: 秒")
+            _send_danmaku(room, "喵")
+            print("[INFO] Sent: 喵")
             next_ts += interval
     except KeyboardInterrupt:
         print("\n[INFO] Stopped.")
