@@ -36,8 +36,10 @@ class AccountManager:
         self.path.write_text("{}", encoding="utf-8")
 
 
-def get_account_manager():
+def get_account_manager(path=None):
     global _ACCOUNT_SINGLETON
+    if path is not None:
+        return AccountManager(path=path)
     try:
         return _ACCOUNT_SINGLETON
     except NameError:
