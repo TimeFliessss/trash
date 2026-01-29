@@ -72,7 +72,7 @@ def main() -> int:
                 time.sleep(next_ts - now)
             now_dt = datetime.now()
             msg_time = f"现在是{now_dt:%H:%M}"
-            _send_danmaku(room, msg_time)
+            # _send_danmaku(room, msg_time)
             print(f"[INFO] Sent: {msg_time}")
             time.sleep(5)
             _send_danmaku(room, "喵")
