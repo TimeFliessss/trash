@@ -163,8 +163,8 @@ def run_highlight_pipeline(show_progress: bool = True, selected_live_keys=None) 
             wonderful_infos,
             start_time,
             end_time,
-            pad_before=15,
-            pad_after=6,
+            pad_before=12,
+            pad_after=5,
         )
         if not merged_clips:
             raise HighlightPipelineError("近 24 小时内未检测到精彩时刻，或录像尚未生成。")

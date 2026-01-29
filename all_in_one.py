@@ -276,6 +276,7 @@ def _upload_video_path(video_path: Path, template: dict, replay_start_time: int 
         pages=[page],
         meta=meta,
         credential=credential,
+        line=video_uploader.Lines.QN
     )
 
     def _log_upload_event(payload):
