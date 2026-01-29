@@ -12,9 +12,9 @@
 
 ## 登录相关
 
-- 首次使用或登录失效时，脚本会在控制台输出微信二维码，扫码后会写入 `LoginInfo.txt`。
+- 首次使用或登录失效时，脚本会在控制台输出微信二维码，扫码后会写入 `g4p_accounts/` 下的账号文件。
 - 只想单独登录/刷新登录信息：双击 `run_login_check.bat`。
-- 如果提示登录过期，可删除 `LoginInfo.txt` 重新扫码。
+- G4P 多账号通过 `g4p_accounts/` 管理（可用 `run_g4p_account_manager.bat` 添加/删除）。
 - B 站登录信息会保存在 `BiliLoginInfo.json`，脚本会自动尝试刷新并同步 `cookie.txt`。
 - 只想单独刷新/登录 B 站：双击 `run_bili_login.bat`。
 

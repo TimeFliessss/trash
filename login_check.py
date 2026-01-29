@@ -1,9 +1,10 @@
 import sys
 from pathlib import Path
 
-from game_for_peace.account import get_account_manager, LOGIN_INFO_PATH
+from game_for_peace.account import get_account_manager
 from game_for_peace.gp_client import GpRequestClient
 from g4p_battles import login_flow
+from g4p_accounts import list_account_paths
 
 
 def _show_message(title: str, message: str) -> None:
@@ -28,41 +29,52 @@ def _refresh_login(client: GpRequestClient, account) -> bool:
 
 
 def main() -> int:
-    account = get_account_manager()
-    client = GpRequestClient(account)
+    paths = list_account_paths()
+    if not paths:
+        print("[ERROR] No G4P accounts found. Please add one in g4p_accounts/.")
+        return 1
 
-    login_file_exists = Path(LOGIN_INFO_PATH).exists()
-    has_valid_login = login_file_exists and account.is_valid_login()
+    any_failed = False
+    for path in paths:
+        account = get_account_manager(path=path)
+        client = GpRequestClient(account)
 
-    if not has_valid_login:
-        print("[INFO] 未检测到有效登录，将启动扫码登录流程。")
+        login_file_exists = Path(path).exists()
+        has_valid_login = login_file_exists and account.is_valid_login()
+        label = path.name
+
+        if not has_valid_login:
+            print(f"[INFO] {label}: 未检测到有效登录，将启动扫码登录流程。")
+            try:
+                login_flow(client, account)
+            except Exception as exc:
+                _show_message("登录失败", f"{label} 扫码登录失败：{exc}")
+                any_failed = True
+                continue
+            _show_message("登录成功", f"{label} 扫码登录完成，登录信息已更新。")
+            continue
+
+        print(f"[INFO] {label}: 检测到已有登录，尝试刷新登录信息...")
+        try:
+            refreshed = _refresh_login(client, account)
+        except Exception as exc:
+            print(f"[WARN] {label}: 刷新登录失败：{exc}")
+            refreshed = False
+
+        if refreshed:
+            _show_message("登录已更新", f"{label} 已刷新登录信息。")
+            continue
+
+        print(f"[WARN] {label}: 未找到可用的 wx_code，改为扫码登录。")
         try:
             login_flow(client, account)
         except Exception as exc:
-            _show_message("登录失败", f"扫码登录失败：{exc}")
-            return 1
-        _show_message("登录成功", "扫码登录完成，LoginInfo.txt 已更新。")
-        return 0
+            _show_message("登录失败", f"{label} 扫码登录失败：{exc}")
+            any_failed = True
+            continue
+        _show_message("登录成功", f"{label} 扫码登录完成，登录信息已更新。")
 
-    print("[INFO] 检测到已有登录，尝试刷新登录信息...")
-    try:
-        refreshed = _refresh_login(client, account)
-    except Exception as exc:
-        print(f"[WARN] 刷新登录失败：{exc}")
-        refreshed = False
-
-    if refreshed:
-        _show_message("登录已更新", "已刷新登录信息，LoginInfo.txt 已更新。")
-        return 0
-
-    print("[WARN] 未找到可用的 wx_code，改为扫码登录。")
-    try:
-        login_flow(client, account)
-    except Exception as exc:
-        _show_message("登录失败", f"扫码登录失败：{exc}")
-        return 1
-    _show_message("登录成功", "扫码登录完成，LoginInfo.txt 已更新。")
-    return 0
+    return 1 if any_failed else 0
 
 
 if __name__ == "__main__":

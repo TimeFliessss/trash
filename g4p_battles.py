@@ -103,8 +103,8 @@ def login_flow(client, account):
     return info
 
 
-def g4p_login():
-    account = get_account_manager()
+def g4p_login(account_path=None):
+    account = get_account_manager(path=account_path)
     client = GpRequestClient(account)
     if not account.is_valid_login():
         login_flow(client, account)
@@ -113,9 +113,9 @@ def g4p_login():
     account.game_open_id = roles[0]['openid']
     return client
 
-def is_g4p_logged_in() -> bool:
+def is_g4p_logged_in(account_path=None) -> bool:
     """Return True if cached login data is still valid."""
-    account = get_account_manager()
+    account = get_account_manager(path=account_path)
     return bool(account.is_valid_login())
 
 

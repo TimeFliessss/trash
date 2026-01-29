@@ -2,7 +2,6 @@ venv/
 __pycache__/
 clips/
 cookie.txt
-LoginInfo.txt
 BiliLoginInfo.json
 *.pyc
 bilibili/upload_template.json

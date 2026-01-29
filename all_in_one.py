@@ -88,6 +88,21 @@ def _choose_replays():
     return [str(replays[i - 1].get("live_key")) for i in indices]
 
 
+def _get_replay_start_time_by_live_key(live_key: str | None) -> int | None:
+    if not live_key:
+        return None
+    credential = _ensure_bili_credential()
+    if not credential:
+        return None
+    cookie_str = cookie_str_from_credential(credential)
+    init(cookie_str)
+    replays = get_replay_list()
+    for r in replays or []:
+        if str(r.get("live_key")) == str(live_key):
+            return r.get("start_time")
+    return None
+
+
 def _run_concat(output_dir: Path):
     script = Path("concat_clips.py")
     if not script.exists():
@@ -203,10 +218,11 @@ def do_upload():
         return 1
 
     video_path = candidates[index - 1]
-    return _upload_video_path(video_path, template)
+    replay_start_time = _get_replay_start_time_by_live_key(video_path.parent.name)
+    return _upload_video_path(video_path, template, replay_start_time=replay_start_time)
 
 
-def _upload_video_path(video_path: Path, template: dict) -> int:
+def _upload_video_path(video_path: Path, template: dict, replay_start_time: int | None = None) -> int:
     tid = template.get("tid", 4)
     tags = template.get("tags", [])
     cover_path = template.get("cover_path", "")
@@ -228,8 +244,11 @@ def _upload_video_path(video_path: Path, template: dict) -> int:
         print("[ERROR] Bilibili login missing/invalid.")
         return 1
 
-    utc_now = datetime.now(timezone.utc)
-    title = f"回放 {utc_now:%Y年%m月%d日}"
+    if replay_start_time:
+        title_time = datetime.fromtimestamp(replay_start_time)
+    else:
+        title_time = datetime.now(timezone.utc)
+    title = f"回放 {title_time:%Y年%m月%d日}"
     desc = ""
 
     page = video_uploader.VideoUploaderPage(str(video_path), title)
@@ -338,7 +357,8 @@ def do_all_in_one():
         return 1
 
     template = _load_template()
-    return _upload_video_path(merged_path, template)
+    replay_start_time = _get_replay_start_time_by_live_key(latest_key)
+    return _upload_video_path(merged_path, template, replay_start_time=replay_start_time)
 
 
 def main():

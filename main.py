@@ -12,6 +12,7 @@ from auto_cut import get_wonderful_times, preprocess_wonderful
 from bilibili.bili_auth import ensure_cookie, BiliAuthError
 from bili_replay_min import init, get_replay_list, get_streams, cut_hls_segment
 from g4p_battles import g4p_login, is_g4p_logged_in
+from g4p_accounts import list_account_paths
 from tqdm import tqdm
 
 COOKIE_FILE = Path("cookie.txt")
@@ -38,7 +39,13 @@ def _progress(iterable: Sequence, enabled: bool, **kwargs):
     return iterable
 
 
-def _collect_recent_battles(g4p_client, query_time: float, roleId: str):
+def _collect_recent_battles(
+    g4p_client,
+    query_time: float,
+    roleId: str,
+    page_count: int = 5,
+    page_size: int = 30,
+):
     tabs = g4p_client.get_battle_mode_tabs()
     all_battles = []
     for t in RECORDING_TAB_MODES:
@@ -48,8 +55,18 @@ def _collect_recent_battles(g4p_client, query_time: float, roleId: str):
         modes = [x['mode'] for x in tab['modeList'] if x['name'] in t[1]]
         if not modes:
             continue
-        battles = g4p_client.get_pubg_battle_list(page=1, count=30, tabIndex=tab['tabIndex'], modes=modes, role_id=roleId)
-        all_battles.extend(battles['list'])
+        for page in range(1, page_count + 1):
+            battles = g4p_client.get_pubg_battle_list(
+                page=page,
+                count=page_size,
+                tabIndex=tab['tabIndex'],
+                modes=modes,
+                role_id=roleId,
+            )
+            batch = battles.get('list') or []
+            all_battles.extend(batch)
+            if len(batch) < page_size:
+                break
     return [x for x in all_battles if 0 <= query_time - int(x['startime']) <= QUERY_RANGE_SECONDS]
 
 
@@ -75,16 +92,20 @@ def run_highlight_pipeline(show_progress: bool = True, selected_live_keys=None) 
     cookie_str = _ensure_cookie()
     query_time = time.time()
 
-    g4p_client = g4p_login()
-    roles = [i['roleId'] for i in g4p_client.account_manager.role_list]
     recent_battles = []
-    for roleId in roles:
-        for b in _collect_recent_battles(g4p_client, query_time, roleId=roleId):
-            recent_battles.append((b, roleId))
+    account_paths = list_account_paths()
+    if not account_paths:
+        raise HighlightPipelineError("未找到 G4P 账号，请先在 g4p_accounts/ 中添加账号。")
+    for account_path in account_paths:
+        g4p_client = g4p_login(account_path=account_path)
+        roles = [i['roleId'] for i in g4p_client.account_manager.role_list]
+        for roleId in roles:
+            for b in _collect_recent_battles(g4p_client, query_time, roleId=roleId):
+                recent_battles.append((b, roleId, g4p_client))
     if not recent_battles:
         raise HighlightPipelineError("最近 24 小时内没有找到有效对局。")
     wonderful_infos = []
-    for b, roleId in _progress(recent_battles, show_progress, desc="获取精彩时间", unit="局"):
+    for b, roleId, g4p_client in _progress(recent_battles, show_progress, desc="获取精彩时间", unit="局"):
         attempt = 15
         while attempt > 0:
             replay_data = g4p_client.parse_replay_data(battleId=b['battleId'], role_id=roleId)
@@ -201,7 +222,11 @@ async def index():
 @app.get("/api/status")
 async def get_status():
     try:
-        logged_in = is_g4p_logged_in()
+        account_paths = list_account_paths()
+        if not account_paths:
+            logged_in = False
+        else:
+            logged_in = any(is_g4p_logged_in(p) for p in account_paths)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"检测登录状态失败：{exc}") from exc
     return {"logged_in": bool(logged_in)}
