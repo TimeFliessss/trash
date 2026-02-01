@@ -17,7 +17,7 @@ from tqdm import tqdm
 
 COOKIE_FILE = Path("cookie.txt")
 RECORDING_TAB_MODES = [('计分', ['全部']), ('不计分', ['全部'])]
-QUERY_RANGE_SECONDS = 86400
+QUERY_RANGE_SECONDS = 864000
 
 
 class HighlightPipelineError(RuntimeError):
@@ -67,7 +67,9 @@ def _collect_recent_battles(
             all_battles.extend(batch)
             if len(batch) < page_size:
                 break
-    return [x for x in all_battles if 0 <= query_time - int(x['startime']) <= QUERY_RANGE_SECONDS]
+    result = [x for x in all_battles if 0 <= query_time - int(x['startime']) <= QUERY_RANGE_SECONDS]
+    print(f"[INFO] 角色 {roleId} 共找到 {len(result)} 条近期对局记录。")
+    return result
 
 
 def _fetch_bili_replays(cookie_str: str):
@@ -97,42 +99,21 @@ def run_highlight_pipeline(show_progress: bool = True, selected_live_keys=None) 
     if not account_paths:
         raise HighlightPipelineError("未找到 G4P 账号，请先在 g4p_accounts/ 中添加账号。")
     for account_path in account_paths:
-        g4p_client = g4p_login(account_path=account_path)
-        roles = [i['roleId'] for i in g4p_client.account_manager.role_list]
-        for roleId in roles:
-            for b in _collect_recent_battles(g4p_client, query_time, roleId=roleId):
-                recent_battles.append((b, roleId, g4p_client))
+        try:
+            print(f"[INFO] 使用 G4P 账号 {account_path} 登录...")
+            g4p_client = g4p_login(account_path=account_path)
+            roles = [(i['roleId'], i['roleName'], i['areaName'], i['serverName']) for i in g4p_client.account_manager.role_list]
+            for roleId, roleName, areaName, serverName in roles:
+                print(f"[INFO] 角色 {roleName} ({roleId} - {areaName}/{serverName}) 开始获取近期对局...")
+                try:
+                    for b in _collect_recent_battles(g4p_client, query_time, roleId=roleId):
+                        recent_battles.append((b, roleId, g4p_client))
+                except Exception as exc: 
+                    print(f"[WARN] 获取角色 {roleName} 近期对局失败, 需检查登录是否有效：{exc}")
+        except Exception as exc:
+            print(f"[WARN] 使用 G4P 账号 {account_path} 登录失败：{exc}")
     if not recent_battles:
-        raise HighlightPipelineError("最近 24 小时内没有找到有效对局。")
-    wonderful_infos = []
-    for b, roleId, g4p_client in _progress(recent_battles, show_progress, desc="获取精彩时间", unit="局"):
-        attempt = 15
-        while attempt > 0:
-            replay_data = g4p_client.parse_replay_data(battleId=b['battleId'], role_id=roleId)
-            if replay_data["reviewStatus"] == 3:
-                rep_data = g4p_client.get_pubg_replay_data(b['battleId'])
-                mode = rep_data['baseInfo']['modeName']
-                play_time = rep_data['baseInfo']['playTime']
-                rank = rep_data['baseInfo']['teamRank'] + "/" + rep_data['baseInfo']['teamCount']
-                areas = rep_data['areas']
-                resources = rep_data['configs']
-                info = get_wonderful_times(
-                    g4p_client.account_manager.game_open_id,
-                    rep_data['dataUrl'],
-                    areas=areas,
-                    resources=resources,
-                    mode=mode,
-                    play_time=play_time,
-                    rank=rank,
-                )
-                if info:
-                    wonderful_infos.append(info)
-                break
-            attempt -= 1
-            time.sleep(1)
-
-    if not wonderful_infos:
-        raise HighlightPipelineError("未能从最近对局中解析出精彩时间。")
+        raise HighlightPipelineError("没有找到有效对局。")
 
     try:
         replays = _fetch_bili_replays(cookie_str)
@@ -143,6 +124,7 @@ def run_highlight_pipeline(show_progress: bool = True, selected_live_keys=None) 
         raise HighlightPipelineError("未找到可用的直播录像。")
 
     target_replays = _select_target_replays(replays, selected_live_keys)
+
     total_success = 0
     summary_failed = []
     all_clip_files = []
@@ -152,13 +134,46 @@ def run_highlight_pipeline(show_progress: bool = True, selected_live_keys=None) 
         streams = get_streams(current_replay)
         if not streams:
             raise HighlightPipelineError("未获取到任何录像码流。")
-
+        if (len(streams) > 1 ):
+            print(f"[WARN] 录像包含多个码流!!!!!!!!!!!!视频可能不完整!!!!!!!!!!!!")
         m3u8 = max(streams, key=lambda s: s['start_time'])
         output_dir = Path("clips") / str(current_replay["live_key"])
         output_dir.mkdir(parents=True, exist_ok=True)
 
         start_time = m3u8["start_time"]
         end_time = m3u8["end_time"]
+        print(f"[INFO] 处理录像 {current_replay['live_key']}，时间范围 {start_time} - {end_time}。")
+        wonderful_infos = []
+        recent_battles_filtered = [x for x in recent_battles if int(x[0]['startime']) >= int(start_time) and int(x[0]['startime']) <= int(end_time)]
+        print(f"[INFO] 共有 {len(recent_battles_filtered)} 条对局记录在录像时间范围内。")
+        for b, roleId, g4p_client in _progress(recent_battles_filtered, show_progress, desc="获取精彩时间", unit="局"):
+            attempt = 15
+            while attempt > 0:
+                replay_data = g4p_client.parse_replay_data(battleId=b['battleId'], role_id=roleId)
+                if replay_data["reviewStatus"] == 3:
+                    rep_data = g4p_client.get_pubg_replay_data(b['battleId'])
+                    mode = rep_data['baseInfo']['modeName']
+                    play_time = rep_data['baseInfo']['playTime']
+                    rank = rep_data['baseInfo']['teamRank'] + "/" + rep_data['baseInfo']['teamCount']
+                    areas = rep_data['areas']
+                    resources = rep_data['configs']
+                    info = get_wonderful_times(
+                        g4p_client.account_manager.game_open_id,
+                        rep_data['dataUrl'],
+                        areas=areas,
+                        resources=resources,
+                        mode=mode,
+                        play_time=play_time,
+                        rank=rank,
+                    )
+                    if info:
+                        wonderful_infos.append(info)
+                    break
+                attempt -= 1
+                time.sleep(1)
+
+        if not wonderful_infos:
+            raise HighlightPipelineError("未能从最近对局中解析出精彩时间。")
         merged_clips, description_chunks = preprocess_wonderful(
             wonderful_infos,
             start_time,
@@ -194,6 +209,7 @@ def run_highlight_pipeline(show_progress: bool = True, selected_live_keys=None) 
             "description_chunks": description_chunks,
         })
 
+
     return {
         "success_count": total_success,
         "failed_messages": summary_failed,
@@ -201,9 +217,6 @@ def run_highlight_pipeline(show_progress: bool = True, selected_live_keys=None) 
         "live_keys": [entry["live_key"] for entry in replay_results],
         "replay_results": replay_results,
     }
-
-
-
 
 
 HTML_PAGE_PATH = Path(__file__).parent / "web" / "index.html"
