@@ -327,7 +327,7 @@ def _get_latest_replay_key():
 
 def do_all_in_one():
     print("[INFO] Logging into G4P (WeChat QR)...")
-    g4p_login()
+    # g4p_login()
     print("[INFO] Logging into Bilibili (QR)...")
     if bili_login.main() != 0:
         return 1
