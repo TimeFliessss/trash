@@ -1,7 +1,7 @@
 # smart_concat.py
 # -*- coding: utf-8 -*-
 """
-Fast & robust concat for lots of mp4 clips (B站更稳的“能copy就copy”策略)
+Fast & robust concat for lots of mp4 clips (B站更稳的"能copy就copy"策略)
 
 Folder layout (same as your existing script):
   <cwd>/
@@ -74,7 +74,17 @@ def run_check(cmd: List[str], desc: str = ""):
         print("[Run]", desc)
     print("[Cmd]", " ".join(str(x) for x in cmd))
     print("=" * 100)
-    subprocess.run(cmd, check=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+    if result.returncode != 0:
+        print("[Error] ffmpeg 执行失败，退出码:", result.returncode)
+        if result.stderr:
+            print("[Error] 错误信息:")
+            print(result.stderr[:2000])  # 只打印前2000字符避免太长
+        raise subprocess.CalledProcessError(result.returncode, cmd)
+    if result.stderr:
+        # 打印警告信息
+        print("[Warn] ffmpeg 警告信息:")
+        print(result.stderr[:1000])
 
 def which_or_local(root: Path, rel: str) -> Optional[Path]:
     # Try local first: <root>/<rel>
@@ -241,26 +251,82 @@ def pick_target_fps_from_first(v_sig: Dict[str, Any]) -> int:
         return 30
     return 24
 
-def detect_gpu_encoder(ffmpeg: Path) -> str:
-    # Return video encoder name
+def detect_gpu_encoder(ffmpeg: Path, use_cpu_only: bool = False) -> Tuple[str, bool]:
+    """
+    Return (video_encoder_name, is_gpu_encoder)
+    """
+    if use_cpu_only:
+        print("[Info] 用户指定使用CPU编码，跳过GPU检测")
+        return "libx264", False
+    
+    # 先测试ffmpeg是否支持GPU编码器
     out = run_capture([str(ffmpeg), "-hide_banner", "-encoders"])
-    if " h264_nvenc " in out or "\nh264_nvenc " in out:
-        return "h264_nvenc"
-    if " h264_qsv " in out or "\nh264_qsv " in out:
-        return "h264_qsv"
-    if " h264_amf " in out or "\nh264_amf " in out:
-        return "h264_amf"
-    return "libx264"
+    
+    # 检测顺序：NVIDIA -> Intel -> AMD -> CPU
+    gpu_encoders = [
+        ("h264_nvenc", "NVIDIA GPU"),
+        ("hevc_nvenc", "NVIDIA GPU"),
+        ("h264_qsv", "Intel GPU"),
+        ("hevc_qsv", "Intel GPU"),
+        ("h264_amf", "AMD GPU"),
+        ("hevc_amf", "AMD GPU"),
+    ]
+    
+    for encoder, gpu_type in gpu_encoders:
+        # 检查编码器是否存在
+        if f" {encoder} " in out or f"\n{encoder} " in out:
+            print(f"[Info] 检测到 {gpu_type} 编码器: {encoder}")
+            
+            # 简单测试编码器是否可用
+            test_cmd = [str(ffmpeg), "-hide_banner", "-f", "lavfi", "-i", "testsrc=duration=1:size=640x480:rate=30",
+                       "-c:v", encoder, "-t", "0.1", "-f", "null", "-"]
+            test_result = subprocess.run(test_cmd, capture_output=True, text=True, timeout=5)
+            
+            if test_result.returncode == 0:
+                print(f"[Info] {encoder} 编码器可用")
+                return encoder, True
+            else:
+                print(f"[Warn] {encoder} 编码器检测到但无法使用，回退到CPU编码")
+                print(f"[Warn] 错误信息: {test_result.stderr[:200] if test_result.stderr else '未知错误'}")
+    
+    print("[Info] 未检测到可用的GPU编码器，使用CPU编码: libx264")
+    return "libx264", False
 
-def vcodec_args_for(encoder: str) -> List[str]:
-    # Reasonable quality/speed defaults
+def vcodec_args_for(encoder: str, is_gpu: bool = True) -> List[str]:
+    """
+    Reasonable quality/speed defaults
+    is_gpu: 是否为GPU编码器（用于调整参数）
+    """
+    # GPU编码器参数 - 简化版，避免复杂参数
     if encoder == "h264_nvenc":
         return ["-c:v", "h264_nvenc", "-preset", "p5", "-cq", "19", "-pix_fmt", "yuv420p"]
-    if encoder == "h264_qsv":
+    elif encoder == "hevc_nvenc":
+        return ["-c:v", "hevc_nvenc", "-preset", "p5", "-cq", "19", "-pix_fmt", "yuv420p"]
+    elif encoder == "h264_qsv":
         return ["-c:v", "h264_qsv", "-preset", "medium", "-global_quality", "20", "-pix_fmt", "yuv420p"]
-    if encoder == "h264_amf":
-        return ["-c:v", "h264_amf", "-quality", "quality", "-pix_fmt", "yuv420p"]
-    return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"]
+    elif encoder == "hevc_qsv":
+        return ["-c:v", "hevc_qsv", "-preset", "medium", "-global_quality", "20", "-pix_fmt", "yuv420p"]
+    elif encoder == "h264_amf":
+        return ["-c:v", "h264_amf", "-quality", "balanced", "-pix_fmt", "yuv420p"]
+    elif encoder == "hevc_amf":
+        return ["-c:v", "hevc_amf", "-quality", "balanced", "-pix_fmt", "yuv420p"]
+    
+    # CPU编码器参数（libx264/libx265）
+    if encoder in ["libx264", "libx265"]:
+        preset = "veryfast"
+        # 如果没有GPU，使用更快的预设
+        if not is_gpu:
+            preset = "ultrafast" if encoder == "libx264" else "veryfast"
+        
+        crf_q = "20" if is_gpu else "22"  # CPU编码时稍微降低质量以加快速度
+        
+        if encoder == "libx264":
+            return ["-c:v", "libx264", "-preset", preset, "-crf", crf_q, "-pix_fmt", "yuv420p"]
+        else:  # libx265
+            return ["-c:v", "libx265", "-preset", preset, "-crf", crf_q, "-pix_fmt", "yuv420p"]
+    
+    # 默认使用libx264
+    return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"]
 
 # ---------------------------
 # Actions
@@ -333,31 +399,45 @@ def reencode_rebuild_pts_onepass(
     out_path: Path,
     target_fps: int,
     encoder: str,
+    is_gpu_encoder: bool,
 ):
     # Key: rebuild PTS with frame index / sample index (more robust than PTS-STARTPTS)
-    v_args = vcodec_args_for(encoder)
+    v_args = vcodec_args_for(encoder, is_gpu_encoder)
+    
+    # 基本命令
     cmd = [
         str(ffmpeg),
         "-y", "-hide_banner", "-loglevel", "info",
         "-fflags", "+genpts+igndts",
-        "-hwaccel", "auto",
         "-f", "concat", "-safe", "0",
         "-i", str(list_file),
-
-        # Video: CFR + rebuild pts strictly by frame index
-        "-vf", f"fps={target_fps},setpts=N/({target_fps}*TB)",
-        "-vsync", "cfr",
-
-        # Audio: 48k + async + rebuild pts strictly by sample index
+    ]
+    
+    # 添加filter
+    if is_gpu_encoder and ("nvenc" in encoder):
+        # NVIDIA GPU编码，使用简单filter链
+        cmd.extend([
+            "-vf", f"fps={target_fps},setpts=N/({target_fps}*TB)",
+            "-vsync", "cfr",
+        ])
+    else:
+        # CPU编码或其他GPU编码
+        cmd.extend([
+            "-vf", f"fps={target_fps},setpts=N/({target_fps}*TB)",
+            "-vsync", "cfr",
+        ])
+    
+    # 添加音频处理和编码参数
+    cmd.extend([
         "-af", "aresample=48000:async=1:first_pts=0,asetpts=N/SR/TB",
         "-ar", "48000",
-
         "-max_interleave_delta", "1M",
         *v_args,
         "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart",
         str(out_path),
-    ]
+    ])
+    
     run_check(cmd, f"重编码（重建时间戳） {target_fps}fps / {encoder}")
 
 def normalize_each_then_concat_copy(
@@ -366,6 +446,7 @@ def normalize_each_then_concat_copy(
     work_dir: Path,
     target_fps: int,
     encoder: str,
+    is_gpu_encoder: bool,
     out_path: Path,
 ) -> Path:
     """
@@ -375,7 +456,7 @@ def normalize_each_then_concat_copy(
     norm_dir = work_dir / "_norm"
     norm_dir.mkdir(parents=True, exist_ok=True)
 
-    v_args = vcodec_args_for(encoder)
+    v_args = vcodec_args_for(encoder, is_gpu_encoder)
     norm_files: List[Path] = []
     for i, src in enumerate(files, 1):
         dst = norm_dir / (src.stem + ".mp4")
@@ -386,18 +467,17 @@ def normalize_each_then_concat_copy(
             "-y", "-hide_banner", "-loglevel", "info",
             "-fflags", "+genpts+igndts",
             "-i", str(src),
-
             "-vf", f"fps={target_fps},setpts=N/({target_fps}*TB)",
             "-vsync", "cfr",
             "-af", "aresample=48000:async=1:first_pts=0,asetpts=N/SR/TB",
             "-ar", "48000",
-
             "-max_interleave_delta", "1M",
             *v_args,
             "-c:a", "aac", "-b:a", "192k",
             "-movflags", "+faststart",
             str(dst),
         ]
+        
         run_check(cmd, f"normalize ({i}/{len(files)}): {src.name} -> {dst.name}")
 
     list_norm = work_dir / "_ffmpeg_concat_list_norm.txt"
@@ -460,10 +540,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sub", help="clips 下的子目录名（等同于 --dir clips/<sub>）")
     ap.add_argument("--dir", help="直接指定含 mp4 片段的目录")
-    ap.add_argument("--out", default="clilps_all.mp4", help="输出文件名（默认 clilps_all.mp4）")
+    ap.add_argument("--out", default="clips_all.mp4", help="输出文件名（默认 clips_all.mp4）")
     ap.add_argument("--strategy", default="auto", choices=["auto", "copy", "remux", "audiofix", "reencode"],
                     help="处理策略：auto/copy/remux/audiofix/reencode")
     ap.add_argument("--fps", type=int, default=0, help="重编码目标帧率（0=自动；常用 30/60）")
+    ap.add_argument("--cpu-only", action="store_true", help="强制使用CPU编码（即使检测到GPU）")
     ap.add_argument("--keep-temp", action="store_true", help="保留 _fixed/_norm 等中间文件夹")
     args = ap.parse_args()
 
@@ -561,7 +642,12 @@ def main():
     # Choose fps/encoder if needed
     base_v = clips[0].v_sig
     target_fps = args.fps if args.fps and args.fps > 0 else pick_target_fps_from_first(base_v)
-    encoder = detect_gpu_encoder(ffmpeg)
+    
+    # 检测GPU编码器，支持强制使用CPU
+    encoder, is_gpu_encoder = detect_gpu_encoder(ffmpeg, use_cpu_only=args.cpu_only)
+    
+    print(f"[Info] 使用编码器: {encoder} ({'GPU' if is_gpu_encoder else 'CPU'})")
+    print(f"[Info] 目标帧率: {target_fps}fps")
 
     # Execute
     try:
@@ -577,7 +663,7 @@ def main():
             all_a_equal = all(clips[i].a_sig == clips[0].a_sig for i in range(len(clips)))
             if not (all_v_equal and all_a_equal):
                 print("[Warn] 音频修复模式下发现参数不一致，改为逐段 normalize 后再 concat。")
-                normalize_each_then_concat_copy(ffmpeg, files, target_dir, target_fps, encoder, out_path)
+                normalize_each_then_concat_copy(ffmpeg, files, target_dir, target_fps, encoder, is_gpu_encoder, out_path)
             else:
                 concat_video_copy_audio_reencode(ffmpeg, list_file, out_path)
 
@@ -586,25 +672,32 @@ def main():
             all_v_equal = all(clips[i].v_sig == clips[0].v_sig for i in range(len(clips)))
             all_a_equal = all(clips[i].a_sig == clips[0].a_sig for i in range(len(clips)))
             if not (all_v_equal and all_a_equal):
-                normalize_each_then_concat_copy(ffmpeg, files, target_dir, target_fps, encoder, out_path)
+                normalize_each_then_concat_copy(ffmpeg, files, target_dir, target_fps, encoder, is_gpu_encoder, out_path)
             else:
-                reencode_rebuild_pts_onepass(ffmpeg, list_file, out_path, target_fps, encoder)
+                reencode_rebuild_pts_onepass(ffmpeg, list_file, out_path, target_fps, encoder, is_gpu_encoder)
 
         elif strategy == "reencode_onepass":
-            reencode_rebuild_pts_onepass(ffmpeg, list_file, out_path, target_fps, encoder)
+            reencode_rebuild_pts_onepass(ffmpeg, list_file, out_path, target_fps, encoder, is_gpu_encoder)
 
         else:
             eprint("[Error] 未知策略：", strategy)
             sys.exit(2)
 
     except subprocess.CalledProcessError as e:
-        eprint("\n[Error] ffmpeg 失败，退出码：", e.returncode)
+        eprint(f"\n[Error] ffmpeg 失败，退出码：{e.returncode}")
+        if e.returncode == 4294967274:
+            eprint("[Error] 错误码 4294967274 (-22) 通常表示参数错误")
+            eprint("[Error] 建议尝试：")
+            eprint("[Error] 1. 使用 --cpu-only 参数强制使用CPU编码")
+            eprint("[Error] 2. 使用 --strategy remux 先尝试简单的remux方案")
+            eprint("[Error] 3. 检查GPU驱动和ffmpeg版本是否支持硬件编码")
         sys.exit(e.returncode)
 
     if out_path.exists():
         print("\n[OK] 输出文件：", out_path)
         print("[OK] 大小（bytes）：", out_path.stat().st_size)
-        print("[Tip] 如果你要上传 B 站仍出现“从某段开始不同步”，直接用 --strategy reencode（它用帧号/采样号重建 PTS，最稳）。")
+        print(f"[Tip] 使用编码器: {encoder} ({'GPU' if is_gpu_encoder else 'CPU'})")
+        print("[Tip] 如果你要上传 B 站仍出现'从某段开始不同步'，直接用 --strategy reencode（它用帧号/采样号重建 PTS，最稳）。")
     else:
         eprint("\n[Error] 运行结束但未生成输出：", out_path)
         sys.exit(2)
