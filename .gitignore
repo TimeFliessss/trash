@@ -6,3 +6,4 @@ BiliLoginInfo.json
 *.pyc
 bilibili/upload_template.json
 g4p_accounts/*.txt
+alert_config.json

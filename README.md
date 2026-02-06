@@ -78,3 +78,25 @@ python concat_clips.py --dir clips/<live_key> --out clips_all.mp4 --strategy cop
 - `dolby`：杜比音效（默认 false）
 - `watermark`：水印（默认 false）
 - `delay_time`：定时发布时间（时间戳秒，留空表示立即）
+
+## alert_config 配置说明
+
+提醒配置采用“模板 + 用户配置”两层：
+- 模板：`alert_config.template.json`（提交到仓库）
+- 用户配置：`alert_config.json`（已加入 `.gitignore`，不会提交）
+
+使用方法：
+1. 复制模板为用户配置：`alert_config.template.json` -> `alert_config.json`
+2. 将 `enabled` 设为 `true`
+3. 按需开启/填写各渠道凭据
+
+可用事件：
+- `upload_complete`：Bilibili 上传完成后提醒
+- `all_in_one_complete`：一条龙完成后提醒
+
+可用渠道：
+- 企业微信机器人 `wecom_bot`
+- 钉钉机器人 `dingtalk_bot`
+- Bark `bark`
+- Telegram 机器人 `telegram_bot`
+- ntfy `ntfy`

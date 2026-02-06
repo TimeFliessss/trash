@@ -1,0 +1,45 @@
+{
+  "_note": "Copy to alert_config.json, set enabled=true and fill credentials.",
+  "enabled": false,
+  "events": {
+    "upload_complete": true,
+    "all_in_one_complete": true
+  },
+  "channels": {
+    "wecom_bot": {
+      "enabled": false,
+      "webhook_url": "",
+      "key": ""
+    },
+    "dingtalk_bot": {
+      "enabled": false,
+      "webhook_url": "",
+      "access_token": "",
+      "secret": "",
+      "keyword": ""
+    },
+    "bark": {
+      "enabled": false,
+      "server": "https://api.day.app",
+      "device_key": "",
+      "group": "",
+      "url": "",
+      "sound": "",
+      "icon": "",
+      "isArchive": ""
+    },
+    "telegram_bot": {
+      "enabled": false,
+      "bot_token": "",
+      "chat_id": ""
+    },
+    "ntfy": {
+      "enabled": false,
+      "server": "https://ntfy.sh",
+      "topic": "",
+      "token": "",
+      "username": "",
+      "password": ""
+    }
+  }
+}

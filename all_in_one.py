@@ -7,6 +7,8 @@ from pathlib import Path
 
 from bilibili_api import sync, video_uploader
 
+import alert
+
 from bilibili.bili_auth import (
     BILI_LOGIN_INFO,
     cookie_str_from_credential,
@@ -307,9 +309,21 @@ def _upload_video_path(video_path: Path, template: dict, replay_start_time: int 
         return 1
 
     if isinstance(result, dict):
-        print(f"[OK] Upload completed. bvid={result.get('bvid')} aid={result.get('aid')}")
+        bvid = result.get("bvid")
+        aid = result.get("aid")
+        print(f"[OK] Upload completed. bvid={bvid} aid={aid}")
+        alert.send_alert(
+            "upload_complete",
+            "Bilibili upload completed",
+            f"bvid={bvid} aid={aid} file={video_path}",
+        )
     else:
         print(f"[OK] Upload completed. result={result}")
+        alert.send_alert(
+            "upload_complete",
+            "Bilibili upload completed",
+            f"result={result} file={video_path}",
+        )
     return 0
 
 
@@ -358,7 +372,24 @@ def do_all_in_one():
 
     template = _load_template()
     replay_start_time = _get_replay_start_time_by_live_key(latest_key)
-    return _upload_video_path(merged_path, template, replay_start_time=replay_start_time)
+    result = _upload_video_path(merged_path, template, replay_start_time=replay_start_time)
+    if result == 0:
+        alert.send_alert(
+            "all_in_one_complete",
+            "All-in-one completed",
+            f"merged={merged_path}",
+        )
+    return result
+
+
+def _schedule_shutdown(delay_seconds: int = 180) -> None:
+    minutes = max(1, int(round(delay_seconds / 60)))
+    print(f"[INFO] Task completed. Scheduling shutdown in {minutes} minute(s).")
+    print("[INFO] To cancel: run 'shutdown /a' in a new terminal.")
+    try:
+        subprocess.run(["shutdown", "/s", "/t", str(int(delay_seconds))], check=False)
+    except Exception as exc:
+        print(f"[ERROR] Failed to schedule shutdown: {exc}")
 
 
 def main():
@@ -369,6 +400,7 @@ def main():
         print("  [3] Merge clips")
         print("  [4] Upload to Bilibili")
         print("  [5] All-in-one (login + download + merge + upload)")
+        print("  [6] All-in-one + auto shutdown (3 minutes)")
         print("  [0] Exit")
         choice = _prompt("Your choice", "0")
         if choice == "1":
@@ -381,6 +413,12 @@ def main():
             do_upload()
         elif choice == "5":
             do_all_in_one()
+        elif choice == "6":
+            result = do_all_in_one()
+            if result == 0:
+                _schedule_shutdown(180)
+                return 0
+            print("[WARN] Task failed. Shutdown skipped.")
         elif choice == "0":
             return 0
         else:
