@@ -41,5 +41,22 @@
       "username": "",
       "password": ""
     }
+  },
+  "one_key_live": {
+    "exe_path": "",
+    "exe_names": ["livehime.exe"],
+    "display_name_keywords": ["哔哩哔哩直播姬"],
+    "window_title": "哔哩哔哩直播姬",
+    "window_class": "Bilibili_Livehime_Chrome_WidgetWin_0",
+    "hotkey_send_method": "scancode",
+    "delay_seconds": 3.0,
+    "pause_on_exit": true,
+    "post_live_programs": [
+      {
+        "path": "",
+        "args": [],
+        "cwd": ""
+      }
+    ]
   }
 }

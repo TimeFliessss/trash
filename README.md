@@ -50,6 +50,29 @@ python main.py
 - 上传
 - 一条龙（登录 + 下载 + 合并 + 上传）
 
+## 一键开播
+
+双击 `run_one_key_live.bat` 启动一键开播脚本。
+
+配置在 `alert_config.json`（模板 `alert_config.template.json`）的 `one_key_live` 节点：
+- `exe_path`：直播姬程序路径（可空，优先从注册表查找）
+- `exe_names`：直播姬可执行文件名列表
+- `display_name_keywords`：注册表匹配关键词
+- `window_title` / `window_class`：用于激活窗口
+- `hotkey_send_method`：`scancode` / `vk`
+- `delay_seconds`：激活窗口后等待再发送热键
+- `pause_on_exit`：脚本结束是否暂停
+- `post_live_programs`：开播后自动启动的程序列表
+
+`post_live_programs` 示例：
+```json
+{
+  "path": "C:/Path/To/App.exe",
+  "args": ["--flag", "value"],
+  "cwd": "C:/Path/To"
+}
+```
+
 ## 片段拼接（手动）
 
 如果只想手动拼接某个直播回放目录：
