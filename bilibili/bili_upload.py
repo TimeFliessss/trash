@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from pathlib import Path
 
 from bilibili_api import request_log, sync, video_uploader
@@ -14,6 +15,9 @@ from bilibili.bili_auth import (
 )
 
 TEMPLATE_PATH = Path("bilibili") / "upload_template.json"
+PROBE_TIMEOUT_SECONDS = 30
+MAX_UPLOAD_RETRIES = 14
+LINE_FAILURE_THRESHOLD = 3
 
 
 def _prompt(text: str, default: str | None = None) -> str:
@@ -78,6 +82,51 @@ def _ensure_credential():
     write_cookie_file(cookie_str_from_credential(credential))
     print("[INFO] Bilibili credential OK.")
     return credential
+
+
+async def _probe_lines_async(blacklist: set[str]) -> tuple[str | None, float | None]:
+    min_cost = PROBE_TIMEOUT_SECONDS
+    fastest_key = None
+    fastest_cost = None
+    legacy_timeout = video_uploader.request_settings.get_timeout()
+    video_uploader.request_settings.set_timeout(PROBE_TIMEOUT_SECONDS)
+    try:
+        for key, line in video_uploader.LINES_INFO.items():
+            if key in blacklist:
+                print(f"[LINE] {key}: skipped (blacklisted)")
+                continue
+            start = time.perf_counter()
+            data = bytes(int(1024 * 0.1 * 1024))
+            client = video_uploader.get_client()
+            ok = True
+            try:
+                await client.request(
+                    method="POST",
+                    url=f'https:{line["probe_url"]}',
+                    data=data,
+                )
+                cost_time = time.perf_counter() - start
+            except Exception:
+                ok = False
+                cost_time = PROBE_TIMEOUT_SECONDS
+            status = "OK" if ok else "FAILED"
+            print(f"[LINE] {key}: {status} {cost_time:.2f}s")
+            if cost_time < min_cost:
+                min_cost = cost_time
+                fastest_key = key
+                fastest_cost = cost_time
+    finally:
+        video_uploader.request_settings.set_timeout(legacy_timeout)
+    return fastest_key, fastest_cost
+
+
+def _choose_best_line(blacklist: set[str]) -> tuple[str | None, float | None]:
+    if blacklist:
+        print(f"[INFO] Line blacklist: {', '.join(sorted(blacklist))}")
+    else:
+        print("[INFO] Line blacklist: (empty)")
+    print("[INFO] Probing upload lines...")
+    return sync(_probe_lines_async(blacklist))
 
 
 def main() -> int:
@@ -148,11 +197,8 @@ def main() -> int:
         dynamic=dynamic or None,
         delay_time=_get_default(template, "delay_time", None) or None,
     )
-    uploader = video_uploader.VideoUploader(
-        pages=[page],
-        meta=meta,
-        credential=credential,
-    )
+    line_failures: dict[str, int] = {}
+    blacklist: set[str] = set()
 
     def _log_event(payload):
         if not isinstance(payload, dict):
@@ -171,16 +217,55 @@ def main() -> int:
         }:
             print(f"[INFO] Upload event: {name} {data}")
 
-    uploader.add_event_listener("__ALL__", _log_event)
+    result = None
+    for attempt in range(1, MAX_UPLOAD_RETRIES + 1):
+        print(f"[INFO] Upload attempt {attempt}/{MAX_UPLOAD_RETRIES}")
+        line_key, line_cost = _choose_best_line(blacklist)
+        if not line_key:
+            print("[ERROR] No available upload line found (all failed or blacklisted).")
+            return 1
 
-    print("[INFO] Uploading...")
-    try:
-        result = sync(uploader.start())
-    except Exception as exc:
-        print(f"[ERROR] Upload failed: {exc}")
-        print("[HINT] '获取 upload_id 错误' usually means preupload failed.")
-        print("[HINT] Common causes: invalid login, network/proxy issue, or upload line blocked.")
-        print("[HINT] Try: run_bili_login.bat, disable proxy/VPN, then retry.")
+        try:
+            line_enum = video_uploader.Lines(line_key)
+        except Exception:
+            print(f"[ERROR] Unknown upload line: {line_key}")
+            return 1
+
+        if line_cost is not None:
+            print(f"[INFO] Selected line: {line_key} ({line_cost:.2f}s)")
+        else:
+            print(f"[INFO] Selected line: {line_key}")
+
+        uploader = video_uploader.VideoUploader(
+            pages=[page],
+            meta=meta,
+            credential=credential,
+            line=line_enum,
+        )
+        uploader.add_event_listener("__ALL__", _log_event)
+
+        print("[INFO] Uploading...")
+        try:
+            result = sync(uploader.start())
+            break
+        except Exception as exc:
+            failures = line_failures.get(line_key, 0) + 1
+            line_failures[line_key] = failures
+            print(f"[ERROR] Upload failed on line {line_key}: {exc}")
+            print(f"[INFO] Line {line_key} failures: {failures}/{LINE_FAILURE_THRESHOLD}")
+            if failures >= LINE_FAILURE_THRESHOLD:
+                if line_key not in blacklist:
+                    blacklist.add(line_key)
+                    print(f"[WARN] Line {line_key} added to blacklist.")
+            if attempt >= MAX_UPLOAD_RETRIES:
+                print(f"[ERROR] Upload failed after {MAX_UPLOAD_RETRIES} attempts. Exiting.")
+                print("[HINT] '获取 upload_id 错误' usually means preupload failed.")
+                print("[HINT] Common causes: invalid login, network/proxy issue, or upload line blocked.")
+                print("[HINT] Try: run_bili_login.bat, disable proxy/VPN, then retry.")
+                return 1
+            print("[INFO] Retrying with a new line selection...")
+            continue
+    if result is None:
         return 1
 
     if isinstance(result, dict):
