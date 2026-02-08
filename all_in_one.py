@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -119,6 +120,48 @@ def _run_concat(output_dir: Path):
         print(f"[ERROR] Merge failed: {exc}")
         return False
     return True
+
+
+def _cleanup_concat_artifacts(output_dir: Path) -> None:
+    if not output_dir.exists():
+        print(f"[WARN] Cleanup skipped, directory missing: {output_dir}")
+        return
+    removed_files = []
+    removed_dirs = []
+
+    for path in output_dir.glob("_ffmpeg_concat_list*.txt"):
+        if path.is_file():
+            try:
+                path.unlink()
+                removed_files.append(path.name)
+            except Exception as exc:
+                print(f"[WARN] Failed to remove {path}: {exc}")
+
+    clips_all = output_dir / "clips_all.mp4"
+    if clips_all.exists():
+        try:
+            clips_all.unlink()
+            removed_files.append(clips_all.name)
+        except Exception as exc:
+            print(f"[WARN] Failed to remove {clips_all}: {exc}")
+
+    for dir_name in ("_fixed", "_norm"):
+        dir_path = output_dir / dir_name
+        if dir_path.exists() and dir_path.is_dir():
+            try:
+                shutil.rmtree(dir_path)
+                removed_dirs.append(dir_name)
+            except Exception as exc:
+                print(f"[WARN] Failed to remove {dir_path}: {exc}")
+
+    if removed_files or removed_dirs:
+        print(f"[INFO] Cleanup done in {output_dir}.")
+        if removed_files:
+            print(f"[INFO] Removed files: {', '.join(removed_files)}")
+        if removed_dirs:
+            print(f"[INFO] Removed dirs: {', '.join(removed_dirs)}")
+    else:
+        print(f"[INFO] Cleanup skipped, nothing to remove in {output_dir}.")
 
 
 def do_login():
@@ -379,7 +422,39 @@ def do_all_in_one():
             "All-in-one completed",
             f"merged={merged_path}",
         )
+        _cleanup_concat_artifacts(output_dir)
     return result
+
+
+def do_cleanup():
+    dirs = _list_clip_dirs()
+    if not dirs:
+        print("[ERROR] No clips directories found.")
+        return 1
+
+    print("\n[INFO] Available clip folders:")
+    for idx, p in enumerate(dirs, 1):
+        print(f"  [{idx}] {p.name}")
+
+    raw = _prompt("Select folders to cleanup (comma, default: 1)", "1")
+    indices = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            indices.append(int(part))
+        except ValueError:
+            print(f"[WARN] Invalid index: {part}")
+    indices = [i for i in indices if 1 <= i <= len(dirs)]
+    if not indices:
+        print("[ERROR] No valid folder selected.")
+        return 1
+
+    for idx in indices:
+        _cleanup_concat_artifacts(dirs[idx - 1])
+    print("[INFO] Cleanup done.")
+    return 0
 
 
 def _schedule_shutdown(delay_seconds: int = 180) -> None:
@@ -401,6 +476,7 @@ def main():
         print("  [4] Upload to Bilibili")
         print("  [5] All-in-one (login + download + merge + upload)")
         print("  [6] All-in-one + auto shutdown (3 minutes)")
+        print("  [7] Cleanup merged artifacts")
         print("  [0] Exit")
         choice = _prompt("Your choice", "0")
         if choice == "1":
@@ -419,6 +495,8 @@ def main():
                 _schedule_shutdown(180)
                 return 0
             print("[WARN] Task failed. Shutdown skipped.")
+        elif choice == "7":
+            do_cleanup()
         elif choice == "0":
             return 0
         else:
