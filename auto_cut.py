@@ -9,7 +9,9 @@ def get_wonderful_times(game_open_id, data_url, areas=None, resources=None, mode
     r = requests.get(data_url)
     data = r.json()
     open_id = game_open_id
-    players = data.get("players", [])
+    players = data.get("players")
+    if (len(players) == 0):
+         players = data.get("basePlayerInfos", [])
     ai_players = data.get("aiPlayers", [])
     teams = {}
     for p in players:
@@ -31,7 +33,10 @@ def get_wonderful_times(game_open_id, data_url, areas=None, resources=None, mode
     for item in data.get("beats", []) or []:
         if item.get("uid") not in related_uid:
             continue
-        locate = locate_point_with_direction((float(item['src']['x']), float(item['src']['y'])), areas)
+        if (len(areas)):
+            locate = locate_point_with_direction((float(item['src']['x']), float(item['src']['y'])), areas)
+        else:
+            locate = ""
         offset = _safe_int(item.get("time"))
         event_ts = start + timedelta(seconds=offset) if start_ts else None
         events.append(

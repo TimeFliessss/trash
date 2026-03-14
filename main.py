@@ -154,7 +154,7 @@ def run_highlight_pipeline(show_progress: bool = True, selected_live_keys=None) 
                     rep_data = g4p_client.get_pubg_replay_data(b['battleId'])
                     mode = rep_data['baseInfo']['modeName']
                     play_time = rep_data['baseInfo']['playTime']
-                    rank = rep_data['baseInfo']['teamRank'] + "/" + rep_data['baseInfo']['teamCount']
+                    rank = str(rep_data['baseInfo']['teamRank']) + "/" + str(rep_data['baseInfo']['teamCount'])
                     areas = rep_data['areas']
                     resources = rep_data['configs']
                     info = get_wonderful_times(

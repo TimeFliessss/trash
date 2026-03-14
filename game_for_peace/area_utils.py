@@ -116,7 +116,7 @@ def locate_point_with_direction(p: Point2D, areas: List[Dict]) -> str:
         #     "direction": "区域内部",
         # }
 
-    return best_name + best_dir
+    return str(best_name) + str(best_dir)
     # return {
     #     "point": p,
     #     "inside_areas": [],
