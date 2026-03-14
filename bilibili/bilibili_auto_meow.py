@@ -61,7 +61,7 @@ def main() -> int:
     room_id = int(room_id_raw)
     room = live.LiveRoom(room_id, credential=credential)
 
-    interval = 300  # 5 minutes
+    interval = 180 * 9  # 3 * 9 minutes
     next_ts = time.time()
     print("[INFO] Start sending danmaku. Press Ctrl+C to stop.")
 
