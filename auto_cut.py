@@ -1,13 +1,35 @@
 import re
+import time
 from datetime import datetime, timedelta
 
 import requests
 
 from game_for_peace.area_utils import locate_point_with_direction
 
+REQUEST_TIMEOUT = (10, 30)
+REQUEST_RETRIES = 20
+RETRY_DELAY_SECONDS = 2
+SESSION = requests.Session()
+
+
+def _load_replay_json(data_url, timeout=REQUEST_TIMEOUT, retries=REQUEST_RETRIES):
+    last_exc = None
+    for attempt in range(1, retries + 1):
+        try:
+            r = SESSION.get(data_url, timeout=timeout)
+            r.raise_for_status()
+            return r.json()
+        except (requests.RequestException, ValueError) as exc:
+            last_exc = exc
+            if attempt == retries:
+                break
+            print(f"[WARN] 获取回放详情失败，第 {attempt}/{retries} 次重试前等待 {RETRY_DELAY_SECONDS}s：{exc}")
+            time.sleep(RETRY_DELAY_SECONDS)
+    raise RuntimeError(f"获取回放详情失败: {last_exc}")
+
+
 def get_wonderful_times(game_open_id, data_url, areas=None, resources=None, mode=None, play_time=None, rank=None):
-    r = requests.get(data_url)
-    data = r.json()
+    data = _load_replay_json(data_url)
     open_id = game_open_id
     players = data.get("players")
     if (len(players) == 0):
@@ -33,7 +55,7 @@ def get_wonderful_times(game_open_id, data_url, areas=None, resources=None, mode
     for item in data.get("beats", []) or []:
         if item.get("uid") not in related_uid:
             continue
-        if (len(areas)):
+        if areas:
             locate = locate_point_with_direction((float(item['src']['x']), float(item['src']['y'])), areas)
         else:
             locate = ""
@@ -54,7 +76,7 @@ def get_wonderful_times(game_open_id, data_url, areas=None, resources=None, mode
     for item in data.get("kills", []) or []:
         if item.get("uid") not in related_uid:
             continue
-        locate = locate_point_with_direction((item['src']['x'], item['src']['y']), areas)
+        locate = locate_point_with_direction((item['src']['x'], item['src']['y']), areas) if areas else ""
         offset = _safe_int(item.get("time"))
         event_ts = start + timedelta(seconds=offset) if start_ts else None
         events.append(
