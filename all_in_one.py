@@ -382,6 +382,86 @@ def _get_latest_replay_key():
     return str(replays[0].get("live_key"))
 
 
+def _get_recent_replay_keys(limit: int) -> list[str]:
+    credential = _ensure_bili_credential()
+    if not credential:
+        return []
+    cookie_str = cookie_str_from_credential(credential)
+    init(cookie_str)
+    replays = get_replay_list()
+    if not replays:
+        return []
+    return [str(r.get("live_key")) for r in replays[:limit] if r.get("live_key")]
+
+
+def _prompt_recent_replay_count(default: int = 1) -> int:
+    raw = _prompt("How many recent replays to process", str(default))
+    try:
+        count = int(raw)
+    except ValueError:
+        print(f"[WARN] Invalid replay count: {raw}. Fallback to {default}.")
+        return default
+    if count <= 0:
+        print(f"[WARN] Replay count must be > 0. Fallback to {default}.")
+        return default
+    return count
+
+
+def _run_all_in_one_for_replays(selected_keys: list[str]) -> int:
+    if not selected_keys:
+        print("[ERROR] No Bilibili replay found.")
+        return 1
+    print(f"[INFO] Processing recent replays: {', '.join(selected_keys)}")
+
+    result = run_highlight_pipeline(show_progress=True, selected_live_keys=selected_keys)
+    replay_results = result.get("replay_results") or []
+    if not replay_results:
+        print("[ERROR] No replay results.")
+        return 1
+
+    template = _load_template()
+    completed_outputs = []
+    failed_live_keys = []
+
+    for replay_result in replay_results:
+        live_key = replay_result.get("live_key")
+        output_dir = Path(replay_result.get("output_dir") or "")
+        if not output_dir.exists():
+            print(f"[ERROR] Output directory missing for live_key={live_key}.")
+            failed_live_keys.append(str(live_key))
+            continue
+
+        if not _run_concat(output_dir):
+            failed_live_keys.append(str(live_key))
+            continue
+
+        merged_path = output_dir / "clips_all.mp4"
+        if not merged_path.exists():
+            print(f"[ERROR] Merged video missing for live_key={live_key}.")
+            failed_live_keys.append(str(live_key))
+            continue
+
+        replay_start_time = _get_replay_start_time_by_live_key(str(live_key))
+        upload_result = _upload_video_path(merged_path, template, replay_start_time=replay_start_time)
+        if upload_result != 0:
+            failed_live_keys.append(str(live_key))
+            continue
+
+        completed_outputs.append(str(merged_path))
+        _cleanup_concat_artifacts(output_dir)
+
+    if failed_live_keys:
+        print(f"[ERROR] All-in-one failed for live_key: {', '.join(failed_live_keys)}")
+        return 1
+
+    alert.send_alert(
+        "all_in_one_complete",
+        "All-in-one completed",
+        f"merged={', '.join(completed_outputs)}",
+    )
+    return 0
+
+
 def do_all_in_one():
     print("[INFO] Logging into G4P (WeChat QR)...")
     # g4p_login()
@@ -393,37 +473,19 @@ def do_all_in_one():
     if not latest_key:
         print("[ERROR] No Bilibili replay found.")
         return 1
+    return _run_all_in_one_for_replays([latest_key])
 
-    result = run_highlight_pipeline(show_progress=True, selected_live_keys=[latest_key])
-    replay_results = result.get("replay_results") or []
-    if not replay_results:
-        print("[ERROR] No replay results.")
+
+def do_all_in_one_recent():
+    print("[INFO] Logging into G4P (WeChat QR)...")
+    # g4p_login()
+    print("[INFO] Logging into Bilibili (QR)...")
+    if bili_login.main() != 0:
         return 1
 
-    output_dir = Path(replay_results[0].get("output_dir") or "")
-    if not output_dir.exists():
-        print("[ERROR] Output directory missing.")
-        return 1
-
-    if not _run_concat(output_dir):
-        return 1
-
-    merged_path = output_dir / "clips_all.mp4"
-    if not merged_path.exists():
-        print("[ERROR] Merged video missing.")
-        return 1
-
-    template = _load_template()
-    replay_start_time = _get_replay_start_time_by_live_key(latest_key)
-    result = _upload_video_path(merged_path, template, replay_start_time=replay_start_time)
-    if result == 0:
-        alert.send_alert(
-            "all_in_one_complete",
-            "All-in-one completed",
-            f"merged={merged_path}",
-        )
-        _cleanup_concat_artifacts(output_dir)
-    return result
+    replay_count = _prompt_recent_replay_count(1)
+    selected_keys = _get_recent_replay_keys(replay_count)
+    return _run_all_in_one_for_replays(selected_keys)
 
 
 def do_cleanup():
@@ -476,7 +538,9 @@ def main():
         print("  [4] Upload to Bilibili")
         print("  [5] All-in-one (login + download + merge + upload)")
         print("  [6] All-in-one + auto shutdown (3 minutes)")
-        print("  [7] Cleanup merged artifacts")
+        print("  [7] All-in-one recent N replays")
+        print("  [8] All-in-one recent N replays + auto shutdown (3 minutes)")
+        print("  [9] Cleanup merged artifacts")
         print("  [0] Exit")
         choice = _prompt("Your choice", "0")
         if choice == "1":
@@ -496,6 +560,14 @@ def main():
                 return 0
             print("[WARN] Task failed. Shutdown skipped.")
         elif choice == "7":
+            do_all_in_one_recent()
+        elif choice == "8":
+            result = do_all_in_one_recent()
+            if result == 0:
+                _schedule_shutdown(180)
+                return 0
+            print("[WARN] Task failed. Shutdown skipped.")
+        elif choice == "9":
             do_cleanup()
         elif choice == "0":
             return 0

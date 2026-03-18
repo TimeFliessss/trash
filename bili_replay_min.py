@@ -1,4 +1,5 @@
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 import requests
@@ -89,3 +90,44 @@ def cut_hls_segment(m3u8_url, start, duration, output_path, timeout=FFMPEG_TIMEO
             print(f"[WARN] 导出失败 {clip_name} attempt={attempt}/{FFMPEG_RETRIES} elapsed={elapsed:.1f}s err={last_exc}")
             time.sleep(REQUEST_RETRY_DELAY_SECONDS)
     raise RuntimeError(str(last_exc))
+
+
+def concat_mp4_segments(input_paths, output_path, timeout=FFMPEG_TIMEOUT_SECONDS):
+    if not input_paths:
+        raise RuntimeError("没有可拼接的片段。")
+    if len(input_paths) == 1:
+        src = Path(input_paths[0]).resolve()
+        dst = Path(output_path).resolve()
+        if src != dst:
+            dst.write_bytes(src.read_bytes())
+        return
+
+    output_path = str(Path(output_path).resolve())
+    with tempfile.TemporaryDirectory(prefix="bili_concat_") as tmp_dir:
+        list_path = Path(tmp_dir) / "concat_list.txt"
+        list_path.write_text(
+            "\n".join(f"file '{Path(p).resolve().as_posix()}'" for p in input_paths),
+            encoding="utf-8",
+        )
+
+        copy_args = [
+            FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "concat", "-safe", "0", "-i", str(list_path),
+            "-c", "copy", "-movflags", "+faststart", output_path,
+        ]
+        proc = subprocess.run(copy_args, capture_output=True, text=True, timeout=timeout)
+        if proc.returncode == 0:
+            return
+
+        fallback_args = [
+            FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "concat", "-safe", "0", "-i", str(list_path),
+            "-c:v", "libx264", "-preset", "veryfast",
+            "-c:a", "aac", "-movflags", "+faststart", output_path,
+        ]
+        proc = subprocess.run(fallback_args, capture_output=True, text=True, timeout=timeout)
+        if proc.returncode == 0:
+            return
+
+        stderr = (proc.stderr or "").strip()
+        raise RuntimeError(f"ffmpeg 拼接失败: {stderr}")

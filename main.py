@@ -1,6 +1,7 @@
 import os
 import time
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import List, Sequence
 
 import uvicorn
@@ -10,7 +11,7 @@ from fastapi.responses import HTMLResponse, FileResponse
 
 from auto_cut import get_wonderful_times, preprocess_wonderful
 from bilibili.bili_auth import ensure_cookie, BiliAuthError
-from bili_replay_min import init, get_replay_list, get_streams, cut_hls_segment
+from bili_replay_min import init, get_replay_list, get_streams, cut_hls_segment, concat_mp4_segments
 from g4p_battles import g4p_login, is_g4p_logged_in
 from g4p_accounts import list_account_paths
 from tqdm import tqdm
@@ -18,6 +19,7 @@ from tqdm import tqdm
 COOKIE_FILE = Path("cookie.txt")
 RECORDING_TAB_MODES = [('计分', ['全部']), ('不计分', ['全部'])]
 QUERY_RANGE_SECONDS = 864000
+REPLAY_BATTLE_LOOKBACK_SECONDS = 20 * 60
 REQUEST_RETRIES = 20
 REQUEST_RETRY_DELAY_SECONDS = 2
 REPLAY_STATUS_RETRIES = 15
@@ -136,6 +138,110 @@ def _extract_wonderful_info(g4p_client, battle: dict, role_id: str):
             time.sleep(1)
     raise RuntimeError(f"对局 {battle_id} 精彩回放生成超时")
 
+
+def _normalize_streams(streams: Sequence[dict]) -> list[dict]:
+    normalized = []
+    for idx, stream in enumerate(streams, start=1):
+        try:
+            start_time = float(stream["start_time"])
+            end_time = float(stream["end_time"])
+            stream_url = stream["stream"]
+        except KeyError as exc:
+            raise HighlightPipelineError(f"码流信息缺少字段: {exc}") from exc
+        if end_time <= start_time:
+            print(f"[WARN] 跳过无效码流 #{idx}，时间范围 {start_time} - {end_time}")
+            continue
+        normalized.append(
+            {
+                **stream,
+                "start_time": start_time,
+                "end_time": end_time,
+                "stream": stream_url,
+            }
+        )
+    if not normalized:
+        raise HighlightPipelineError("未获取到有效录像码流。")
+    normalized.sort(key=lambda s: (s["start_time"], s["end_time"]))
+    return normalized
+
+
+def _build_stream_parts(streams: Sequence[dict], clip_start_time: float, clip_end_time: float):
+    parts = []
+    gaps = []
+    cursor = clip_start_time
+
+    for stream in streams:
+        stream_start = float(stream["start_time"])
+        stream_end = float(stream["end_time"])
+        if stream_end <= cursor:
+            continue
+        if stream_start > cursor:
+            gap_end = min(stream_start, clip_end_time)
+            if gap_end > cursor:
+                gaps.append((cursor, gap_end))
+            cursor = stream_start
+        if cursor >= clip_end_time:
+            break
+        overlap_start = max(cursor, stream_start)
+        overlap_end = min(stream_end, clip_end_time)
+        if overlap_end <= overlap_start:
+            continue
+        parts.append(
+            {
+                "stream": stream,
+                "start_time": overlap_start,
+                "end_time": overlap_end,
+                "start_offset": overlap_start - stream_start,
+                "duration": overlap_end - overlap_start,
+            }
+        )
+        cursor = overlap_end
+        if cursor >= clip_end_time:
+            break
+
+    if cursor < clip_end_time:
+        gaps.append((cursor, clip_end_time))
+
+    return parts, gaps
+
+
+def _export_highlight_clip(streams: Sequence[dict], replay_start_time: float, start_offset: float, duration: float, output_path: Path):
+    clip_start_time = replay_start_time + start_offset
+    clip_end_time = clip_start_time + duration
+    parts, gaps = _build_stream_parts(streams, clip_start_time, clip_end_time)
+    if not parts:
+        raise HighlightPipelineError(
+            f"精彩片段 {clip_start_time:.3f} - {clip_end_time:.3f} 不在任何码流范围内。"
+        )
+
+    covered_duration = sum(part["duration"] for part in parts)
+    if gaps:
+        gap_desc = ", ".join(f"{int(s)}-{int(e)}" for s, e in gaps)
+        print(f"[WARN] 片段 {output_path.name} 存在未覆盖时间段：{gap_desc}")
+
+    if len(parts) == 1 and abs(covered_duration - duration) < 1e-3:
+        part = parts[0]
+        cut_hls_segment(
+            part["stream"]["stream"],
+            start=part["start_offset"],
+            duration=part["duration"],
+            output_path=str(output_path),
+        )
+        return
+
+    with TemporaryDirectory(dir=output_path.parent, prefix=f".tmp_{output_path.stem}_") as tmp_dir:
+        tmp_paths = []
+        for idx, part in enumerate(parts, start=1):
+            tmp_path = Path(tmp_dir) / f"part_{idx:03d}.mp4"
+            cut_hls_segment(
+                part["stream"]["stream"],
+                start=part["start_offset"],
+                duration=part["duration"],
+                output_path=str(tmp_path),
+            )
+            tmp_paths.append(tmp_path)
+        concat_mp4_segments(tmp_paths, str(output_path))
+
 def run_highlight_pipeline(show_progress: bool = True, selected_live_keys=None) -> dict:
     cookie_str = _ensure_cookie()
     query_time = time.time()
@@ -181,20 +287,25 @@ def run_highlight_pipeline(show_progress: bool = True, selected_live_keys=None) 
             f"获取录像码流 {current_replay['live_key']}",
             lambda: get_streams(current_replay),
         )
-        if not streams:
-            raise HighlightPipelineError("未获取到任何录像码流。")
-        if (len(streams) > 1 ):
-            print(f"[WARN] 录像包含多个码流!!!!!!!!!!!!视频可能不完整!!!!!!!!!!!!")
-        m3u8 = max(streams, key=lambda s: s['start_time'])
+        streams = _normalize_streams(streams)
+        if len(streams) > 1:
+            print(f"[INFO] 录像包含 {len(streams)} 个码流，将按时间范围自动拼接导出精彩片段。")
         output_dir = Path("clips") / str(current_replay["live_key"])
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        start_time = m3u8["start_time"]
-        end_time = m3u8["end_time"]
+        start_time = min(stream["start_time"] for stream in streams)
+        end_time = max(stream["end_time"] for stream in streams)
         print(f"[INFO] 处理录像 {current_replay['live_key']}，时间范围 {start_time} - {end_time}。")
         wonderful_infos = []
-        recent_battles_filtered = [x for x in recent_battles if int(x[0]['startime']) >= int(start_time) and int(x[0]['startime']) <= int(end_time)]
-        print(f"[INFO] 共有 {len(recent_battles_filtered)} 条对局记录在录像时间范围内。")
+        filter_start_time = start_time - REPLAY_BATTLE_LOOKBACK_SECONDS
+        recent_battles_filtered = [
+            x for x in recent_battles
+            if int(x[0]['startime']) >= int(filter_start_time) and int(x[0]['startime']) <= int(end_time)
+        ]
+        print(
+            f"[INFO] 共有 {len(recent_battles_filtered)} 条对局记录在录像时间范围内 "
+            f"(起始向前放宽 {REPLAY_BATTLE_LOOKBACK_SECONDS // 60} 分钟)。"
+        )
         for b, roleId, g4p_client in _progress(recent_battles_filtered, show_progress, desc="获取精彩时间", unit="局"):
             try:
                 info = _extract_wonderful_info(g4p_client, b, roleId)
@@ -222,7 +333,13 @@ def run_highlight_pipeline(show_progress: bool = True, selected_live_keys=None) 
         for s, d in _progress(merged_clips, show_progress, desc="导出精彩片段", unit="段"):
             output_path = output_dir / f"clip_{int(start_time+s)}_{int(d)}.mp4"
             try:
-                cut_hls_segment(m3u8['stream'], start=s, duration=d, output_path=str(output_path))
+                _export_highlight_clip(
+                    streams,
+                    replay_start_time=start_time,
+                    start_offset=s,
+                    duration=d,
+                    output_path=output_path,
+                )
                 success_count += 1
                 clip_files_current.append(str(output_path.resolve()))
             except Exception as exc:

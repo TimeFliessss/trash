@@ -7,7 +7,7 @@ Folder layout (same as your existing script):
   <cwd>/
     bin/ffmpeg(.exe), bin/ffprobe(.exe)   (optional, otherwise use PATH)
     clips/<subdir>/*.mp4
-    only files named: clip_<ts>_<idx>.mp4  (sorted by ts then idx)
+    only files named: clip_<ts>_<num>.mp4  (sorted by ts then num)
 
 Strategy (default: auto):
   1) If all clips look perfectly compatible + no timestamp anomalies -> concat demuxer + -c copy  (fastest)
@@ -600,7 +600,7 @@ def main():
     if ignored:
         print("[Warn] ignored examples:", ignored[:10])
     if not files:
-        eprint("[Error] 没有找到符合 clip_<ts>_<idx>.mp4 的文件。")
+        eprint("[Error] 没有找到符合 clip_<ts>_<num>.mp4 的文件。")
         sys.exit(1)
 
     out_path = (target_dir / args.out).resolve()
